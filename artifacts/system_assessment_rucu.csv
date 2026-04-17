@@ -1,0 +1,2 @@
+avg_requests,avg_errors,avg_error_rate,avg_latency_ms,avg_requests_per_error,system_state
+157.35,4.43,0.03,33.71,44.29,STABLE
