@@ -1,0 +1,2 @@
+avg_admissions,avg_discharge_delays,avg_delay_rate,avg_wait_mins,avg_admissions_per_delay,system_state
+48.7,4.15,0.07,48.75,16.77,STABLE

@@ -65,22 +65,22 @@ ROOT_DIR: Final[Path] = Path.cwd()
 DATA_DIR: Final[Path] = ROOT_DIR / "data"
 ARTIFACTS_DIR: Final[Path] = ROOT_DIR / "artifacts"
 
-DATA_FILE: Final[Path] = DATA_DIR / "system_metrics_case.csv"
-OUTPUT_FILE: Final[Path] = ARTIFACTS_DIR / "system_assessment_rucu.csv"
+DATA_FILE: Final[Path] = DATA_DIR / "system_metrics_rucu_custom_application.csv"
+OUTPUT_FILE: Final[Path] = ARTIFACTS_DIR / "system_modification_assessment_rucu.csv"
 
 # === DEFINE THRESHOLDS ===
 
 # Analysts need to know their data and
 # choose thresholds that make sense for their specific use case.
 
-MAX_ERROR_RATE: Final[float] = 0.05
-MAX_AVG_LATENCY: Final[float] = 40.0
+MAX_DELAY_RATE: Final[float] = 0.10
+MAX_AVG_WAIT_MINS: Final[float] = 40.0
 
 # === DEFINE THE MAIN FUNCTION ===
 
 
 def main() -> None:
-    """Run the pipeline.
+    """Run the hospital patient pipeline.
 
     log_header() logs a standard run header.
     log_path() logs repo-relative paths (privacy-safe).
@@ -100,30 +100,37 @@ def main() -> None:
     log_path(LOG, "ARTIFACTS_DIR", ARTIFACTS_DIR)
 
     # ----------------------------------------------------
-    # STEP 1: READ SYSTEM METRICS
+    # STEP 1: READ PATIENT FLOW METRICS
     # ----------------------------------------------------
     df = pl.read_csv(DATA_FILE)
 
-    LOG.info(f"STEP 1. Loaded {df.height} system records")
+    LOG.info(f"STEP 1. Loaded {df.height} patient flow records")
 
     # ----------------------------------------------------
     # STEP 2: DESIGN SIGNALS
     # ----------------------------------------------------
     # This step connects to Module 3: Signal Design.
-    # Create useful signals derived from raw system metrics.
+    # Create useful signals derived from raw hospital metrics.
 
     LOG.info("STEP 2. Designing signals from raw metrics...")
 
     df = df.with_columns(
         [
-            (pl.col("errors") / pl.col("requests")).alias("error_rate"),
-            (pl.col("total_latency_ms") / pl.col("requests")).alias("avg_latency_ms"),
-            (pl.col("requests") / pl.col("errors").replace(0, None)).alias(
-                "requests_per_error"
-            ),
+            (
+                pl.col("number of patience_delayed_discharge")
+                / pl.col("number of patients admitted")
+            ).alias("delayed_rate"),
+            (
+                pl.col("total_wait_time_mins") / pl.col("number of patients admitted")
+            ).alias("avg_wait_mins"),
+            # Modification
+            (
+                pl.col("number of patients admitted")
+                / pl.col("number of patience_delayed_discharge").replace(0, None)
+            ).alias("admissions_per_delay"),
         ]
     )
-    LOG.info("Step 2: Added derived field:requests_per_error")
+    LOG.info("Step 2: Added derived field:admissions_per_delay")
     # ----------------------------------------------------
     # STEP 3: DETECT ANOMALIES
     # ----------------------------------------------------
@@ -133,18 +140,18 @@ def main() -> None:
     LOG.info("STEP 3. Checking for anomalies in system signals...")
 
     anomalies_df = df.filter(
-        (pl.col("error_rate") > MAX_ERROR_RATE)
-        | (pl.col("avg_latency_ms") > MAX_AVG_LATENCY)
+        (pl.col("number of patience_delayed_discharge") > MAX_DELAY_RATE)
+        | (pl.col("avg_wait_mins") > MAX_AVG_WAIT_MINS)
     )
     LOG.info(
-        f"STEP 3. Using thresholds: MAX_ERROR_RATE={MAX_ERROR_RATE}, "
-        f"MAX_AVG_LATENCY={MAX_AVG_LATENCY}"
+        f"STEP 3. Using thresholds: MAX_DELAY_RATE={MAX_DELAY_RATE}, "
+        f"MAX_AVG_WAIT_MINS={MAX_AVG_WAIT_MINS}"
     )
 
     LOG.info(f"STEP 3. Anomalies detected: {anomalies_df.height}")
 
     # ----------------------------------------------------
-    # STEP 4: SUMMARIZE CURRENT SYSTEM STATE
+    # STEP 4: SUMMARIZE CURRENT HOSPITAL STATE
     # ----------------------------------------------------
     # This step brings together ideas from earlier modules:
     # - Module 3: Signal Design
@@ -162,45 +169,47 @@ def main() -> None:
 
     summary_df = df.select(
         [
-            pl.col("requests").mean().alias("avg_requests"),
-            pl.col("errors").mean().alias("avg_errors"),
-            pl.col("error_rate").mean().alias("avg_error_rate"),
-            pl.col("avg_latency_ms").mean().alias("avg_latency_ms"),
+            pl.col("number of patients admitted").mean().alias("avg_admissions"),
+            pl.col("number of patience_delayed_discharge")
+            .mean()
+            .alias("avg_discharge_delays"),
+            pl.col("delayed_rate").mean().alias("avg_delay_rate"),
+            pl.col("avg_wait_mins").mean().alias("avg_wait_mins"),
             # Include the mean of the new derived field to the summary
-            pl.col("requests_per_error").mean().alias("avg_requests_per_error"),
+            pl.col("admissions_per_delay").mean().alias("avg_admissions_per_delay"),
         ]
     )
 
     # Add a simple assessment label
     summary_df = summary_df.with_columns(
         pl.when(
-            (pl.col("avg_error_rate") > MAX_ERROR_RATE)
-            | (pl.col("avg_latency_ms") > MAX_AVG_LATENCY)
+            (pl.col("avg_delay_rate") > MAX_DELAY_RATE)
+            & (pl.col("avg_wait_mins") > MAX_AVG_WAIT_MINS)
         )
         .then(pl.lit("DEGRADED"))
         .otherwise(pl.lit("STABLE"))
         .alias("system_state")
     )
 
-    LOG.info("STEP 4. System assessment completed")
+    LOG.info("STEP 4. Hospital assessment completed")
     # -------------------------------------------------------------
     # STEP 4b. Round Numeric fields to 2 Decimal places
     # -------------------------------------------------------------
     numeric_cols = [
-        "avg_requests",
-        "avg_errors",
-        "avg_error_rate",
-        "avg_latency_ms",
-        "avg_requests_per_error",
+        "avg_admissions",
+        "avg_discharge_delays",
+        "avg_delay_rate",
+        "avg_wait_mins",
+        "avg_admissions_per_delay",
     ]
     summary_df = summary_df.with_columns([pl.col(c).round(2) for c in numeric_cols])
     LOG.info("STEP 4b.Rounded all numeric summary fields to 2 decimal places")
     # ----------------------------------------------------
-    # STEP 5: SAVE SYSTEM ASSESSMENT
+    # STEP 5: SAVE HOSPITAL ASSESSMENT
     # ----------------------------------------------------
     summary_df.write_csv(OUTPUT_FILE)
 
-    LOG.info(f"STEP 5. Wrote system assessment file: {OUTPUT_FILE}")
+    LOG.info(f"STEP 5. Wrote hospital assessment file: {OUTPUT_FILE}")
 
     LOG.info("========================")
     LOG.info("Pipeline executed successfully!")
